@@ -1,42 +1,91 @@
-#include "freertos/FreeRTOS.h"
-#include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_event.h"
-#include "esp_event_loop.h"
-#include "nvs_flash.h"
 #include "driver/gpio.h"
+#include <stdio.h>
 
-esp_err_t event_handler(void *ctx, system_event_t *event)
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
+#include "esp_log.h"
+#include "esp_event_base.h"
+
+#define BLINK_GPIO GPIO_NUM_2
+
+static const char* TAG = "Debug";
+
+QueueHandle_t xQueue = NULL;
+
+uint32_t time_last, time_new, result ;
+uint32_t (*tbt)(void);
+uint32_t time_between_tasks (void)//a function that determines the amount of time since the last call
 {
-    return ESP_OK;
+	time_last = time_new;
+	time_new = esp_log_early_timestamp();
+	if(time_new<time_last)
+	{
+		return result;
+	}
+	else
+		{
+			return result = time_new - time_last;
+		}
 }
 
+
+/*------------------------------------------------------------------------*/
+static void ReceiverTask(void *pvParameter)
+{
+	uint8_t counter = 0;
+	tbt = time_between_tasks;
+	for( ;; )
+	{
+		if( xQueue != NULL )
+		{
+			if(xQueueReceive(xQueue, &counter, (TickType_t) (100/portTICK_PERIOD_MS)))
+			{
+				ESP_LOGI(TAG, "Task [RX]: received:    %u TBT: %u", counter, tbt());
+			}
+//			else ESP_LOGI(TAG, "Value don't received ");
+
+		}
+//		vTaskDelay(50 / portTICK_PERIOD_MS);
+	}
+}
+/*------------------------------------------------------------------------*/
+static void TransmitterTask(void *pvParameter)
+{
+	uint8_t counter;
+	for( ;; )
+	{
+	    xQueueSend(xQueue, (void *)&counter, (TickType_t) 100/portTICK_PERIOD_MS);//send the counter value to the queue
+	    if(counter < 255)
+	    	{
+	    		counter++;
+	    	}
+	    else counter = 0;
+
+	    ESP_LOGI(TAG, "Task [TX]: transmitted: %u", counter);
+	    vTaskDelay(5000/portTICK_PERIOD_MS);
+	}
+}
+/*------------------------------------------------------------------------*/
 void app_main(void)
 {
-    nvs_flash_init();
-    tcpip_adapter_init();
-    ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    wifi_config_t sta_config = {
-        .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
-            .bssid_set = false
-        }
-    };
-    ESP_ERROR_CHECK( esp_wifi_set_config(WIFI_IF_STA, &sta_config) );
-    ESP_ERROR_CHECK( esp_wifi_start() );
-    ESP_ERROR_CHECK( esp_wifi_connect() );
 
-    gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
-    int level = 0;
-    while (true) {
-        gpio_set_level(GPIO_NUM_4, level);
-        level = !level;
-        vTaskDelay(300 / portTICK_PERIOD_MS);
-    }
+
+    xQueue = xQueueCreate(5, sizeof(uint8_t));//create a queue for 5 values
+	if(xQueue != NULL)
+	{
+		ESP_LOGI(TAG, "Queue is created");
+		xTaskCreate(&TransmitterTask, "TX", 2048, NULL, 1, NULL );//create transmitter task
+		ESP_LOGI(TAG, "TX task is created");
+		xTaskCreate(&ReceiverTask, "RX", 2048, NULL, 1, NULL);//create receiver task
+		ESP_LOGI(TAG, "RX task is created");
+
+	}
+	else {
+		ESP_LOGW(TAG, "Queue is not created \n");
+	}
 }
 
